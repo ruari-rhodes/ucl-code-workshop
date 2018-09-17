@@ -2,24 +2,41 @@
 title: "US Urban growth"
 author: "Ruari Rhodes"
 output:
-  html_notebook:
-    code_folding: hide
   html_document:
     df_print: paged
+  html_notebook:
+    code_folding: hide
 ---
+
+
+# Multi-lingual spatial data workflows
+
+## R, Python and Earth Engine
+
+This document will walk you through some uses for an interactive R/Python script, with calls to the Earth Engine API embedded. It assumes working knowledge of all three languages, but should be straightforward to follow the majority of the process.
+
+As an example, we will investigate the 20 largest urban areas by population in the USA. Urban area statistics are captured by the US census in "Census Statistical Areas" (CSA), which encompass conurbations.
+
+As always, we will start by loading libraries:
+
 
 
 ```{r load_libraries, message=FALSE, warning=FALSE}
 library( tidyverse)
 library( sf)
 library( here)
+library( googledrive)
+library( gridExtra)
 library( reticulate)
 use_python("/anaconda3/bin/python")
 ```
 
-We want to investigate the 20 largest urban areas by population in the USA. Urban area statistics are captured by the US census in "Census Statistical Areas" (CSA), which encompass conurbations.
 
-Step 1 is to load in CSA population data (originally pulled from Wikipedia):
+## Simple Features and spatial data in R
+
+We start by loading in some Census Statistical Area (CSA) population data (originally pulled from Wikipedia). Our populations are stored in a CSV file, and we'll be joining them onto a Simple Features dataframe of spatial polygons.
+
+
 
 ```{r get_populous_areas, message=FALSE}
 
@@ -29,7 +46,7 @@ Step 1 is to load in CSA population data (originally pulled from Wikipedia):
 
 ```
 
-Step 2: Next we can get a shapefile of CSAs (freely available from the US Gov't TIGER shapefile database:
+Now we have our population data for each CSA, we can join them to a spatial polygon database (a "Simple Feature") (freely available from the US Gov't TIGER shapefile database:
 
 ```{r get_csas}
 csa <- read_sf( here( 'data_in', 'cb_2017_us_csa_500k', 'cb_2017_us_csa_500k.shp'))
@@ -39,44 +56,34 @@ csa is a "SimpleFeatures" object. This is a normal dataframe with a geometry col
 
 Let's investigate the data inside csa:
 
-```{r}
-glimpse( csa)
+```{r view_csas}
+head( csa)
 ```
 
 
-We can see that NAME contains the standard format CSA name as we have in the population dataset.
+We can see that NAME contains the standard format CSA name as we have in the population dataset, meaning we can join the two using inner_join(). We'll also filter the data to the 20 most populous regions.
 
-Step 4: Join population data to the CSA polygons
+```{r join_csa_data}
 
-```{r}
-csa_joined <- csa %>% 
-  inner_join( urban_areas, by=c("NAME" = "CSA"))
-
-glimpse( csa_joined)
-```
-
-
-Step 5: Filter the CSA polygons to the top 20 most populous cities:
-
-
-```{r}
-
+# How many CSAs to keep?
 n_csa <- 20
 
-csa_filtered <- csa_joined %>% 
+
+(csa_filtered <- csa %>% 
+    inner_join( urban_areas, by=c("NAME" = "CSA")) %>% 
     arrange( desc(Pop)) %>% 
     head(    n_csa) %>% 
-    select(  NAME, Pop)
+    select(  NAME, Pop) )
 ```
 
+
+## Visualising in R
 
 So, where are these regions?
 
-### Step 6: Visualise
-
 *R top tip:* ggplot + geom_sf() will plot **sf** objects within the grammar of graphics framework (i.e. in a simple, readable, layerable way)
 
-```{r visualise_csas, fig.width=8, fig.height=6}
+```{r visualise_csas, fig.width=7, fig.height=5}
 
 # Load a state shapefile, and filter out states (and territories) that aren't in the lower 48
 states_sf <- read_sf( here( 'data_in/cb_2017_us_state_20m/cb_2017_us_state_20m.shp')) %>% 
@@ -101,7 +108,9 @@ ggplot(csa_filtered) +
 ```
 
 
-Great - so we've got the top 20 census urban regions by population. But R isn't going to be powerful enough to analyse land use changes for these regions, so it's time to bring in Earth Engine.
+## Transfer to Python
+
+So we've got the top 20 census urban regions by population. But R isn't going to be powerful enough to analyse land use changes for these regions, so it's time to bring in Earth Engine.
 
 We can use R to create a plaintext version of an Earth Engine geometry, which can be passed to Python to use its Earth Engine API.
 
@@ -129,23 +138,22 @@ csa_filtered %>%
 
 Here we have output everything to text files for future reference, but note that we could simply have transferred data from an R chunk to a Python chunk. For example, if we create a dataframe in R called test data:
 
-```{r}
+```{r data_to_python}
 test_data <- data.frame( a=1:10, b=11:20)
 ```
 
 
 We can access it in Python using r.test_data:
 
-```{python}
-print( r.test_data)
-
+```{python data_in_python}
 test_data = r.test_data
+
+test_data.describe()
 ```
 
 And we can send it back to R again as py$test_data
-```{r}
-py$test_data
-
+```{r data_to_r}
+py$test_data %>% glimpse()
 ```
 
 
@@ -160,7 +168,7 @@ pip install earthengine-api
 
 and import the package to Python as ee, followed by ee.Initialize(). The first time you do this, a browser will pop up asking you to authorise access to your account.
 
-```{python}
+```{python ee_setup}
 
 # Import the Earth Engine Python Package
 import ee
@@ -171,124 +179,15 @@ import os
 # Initialize the Earth Engine object, using the authentication credentials.
 ee.Initialize()
 
-
-
-```
-
-Let's define a function in Python that will take a Polygon geometry and return the % increase in impermeable area between 2001 and 2011, just as we did in the Javascript IDE before. Note that we could package this up and import it in the usual way.
-
-```{python}
-
-# ### Create imperviousness change function
-
-def imperv_change(urban_region):
-  # Look at change of imperviousness from 2001 to 2011
-  
-  nlcd_2001 = ee.Image( 'USGS/NLCD/NLCD2001')
-  nlcd_2011 = ee.Image( 'USGS/NLCD/NLCD2011')
-  
-  # Get imperviousness layer
-  nlcd_2001_imperv = nlcd_2001.select('impervious').clip( urban_region) 
-  nlcd_2011_imperv = nlcd_2011.select('impervious').clip( urban_region)
-  
-  # Can we quantify how much Chicago grew in these 10 years?
-  imperv_difference = nlcd_2011_imperv.subtract( nlcd_2001_imperv) 
-  
-  # Lose zero values - they don't interest us right now
-  imperv_difference_masked = imperv_difference.updateMask( imperv_difference) 
-  
-  # Find the fraction of pixels in this region that show an increase in impermeability
-    
-  # ee.Image.pixelarea multiplies the value of each pixel by its area
-  # So, setting each pixel value to 1 and multiplying by area gives
-  # a map of pixel areas of all valid pixels
-  urban_pixelarea = imperv_difference.gt(-999).multiply( ee.Image.pixelArea()) 
-  
-  increased_imperv_pixelarea = imperv_difference.gt( 0).multiply( ee.Image.pixelArea()) 
-  
-  # Reduceregions applies a reducer to all pixels in a region
-  # In this case, we are getting the sum of all pixel areas
-  # within each image, and extracting it as an ee.Numeric object
-  increased_imperv_area = ee.Number(
-      ee.List(
-        increased_imperv_pixelarea
-        .reduceRegions( urban_region, ee.Reducer.sum())
-        .aggregate_array( 'sum')
-      ).get(0)
-    ) 
-  
-  urban_area =   ee.Number( ee.List(
-        urban_pixelarea
-        .reduceRegions( urban_region, ee.Reducer.sum())
-        .aggregate_array( 'sum')
-      ).get(0)
-    ) 
-  
-  return increased_imperv_area.divide( urban_area)
-
-```
-
-Now we'll iteratively read in the plaintext polygon data that we produced in R, transform it into ee.Geometry.Polygon objects, and pass it to the function we just wrote:
-
-```{python}
-
-coord_directory = os.getcwd() + "/data_out/csa_wkt"
-files           = os.listdir( coord_directory)
-files           = np.array( files)[ [f.endswith(".txt") for f in files] ]
-paths           = [coord_directory + "/" + f for f in files]
-
-
-change   = np.array([])
-csa_name = np.array([])
-
-# Loop over input files. Create earth engine geometry, run imperv_change function over
-# this geometry, export imperviousness change and CSA name
-
-for i in range(0,len(paths)):
-    
-    # print( "Running file " + str(i) + " (", paths[i], ")") # uncomment to print progress
-    
-    f = open( paths[i], 'r')
-    urban_geometry_raw = f.read()
-    urban_geometry     = [ float(n) for n in urban_geometry_raw.split()]
-    urban_geometry_ee  = ee.Geometry.Polygon(urban_geometry)
-
-    change   = np.append( change, imperv_change( urban_geometry_ee ).getInfo() )
-    csa_name = np.append( csa_name, files[i].split(', ')[0] )
-    
-
-
-output_file = pd.DataFrame( {"csa_name": csa_name,
-                             "change":   change * 100})
-
-```
-
-Now we should have a Pandas dataframe containing the name of the CSA and the % change in impermeable region. Let's check:
-
-```{python}
-print( output_file.head())
-```
-
-The same data will now be accessible in R, if we choose to do our analysis there:
-
-```{r fig.height=6, fig.width=6}
-py$output_file
-
-py$output_file %>% 
-  ggplot() +
-    geom_bar( aes( x=csa_name, y=change), stat="identity", fill="darkred") +
-    theme_bw() +
-    theme( axis.text.x = element_text( angle=90))
 ```
 
 
-This is great, and we can easily analyse data in this format, in either Python or R. However, if you are exporting large datasets, the .getInfo() command will refuse to play ball at about 5,000 observations. In this case, you will need to export the data from Earth Engine to Google Drive, then access it from there.
-
-Clearly the previous dataset is small enough to directly access results using ".getInfo()". But what if we wanted to take a random sample of 10,000 pixels from one of our regions? 
+Let's try taking a sample of 10,000 land use/land cover points within our CSA regions.
 
 
-```{python}
+```{python ee_function}
 
+# Load in the plaintext geometries that we saved earlier
 coord_directory = os.getcwd() + "/data_out/csa_wkt"
 files           = os.listdir( coord_directory)
 files           = np.array( files)[ [f.endswith(".txt") for f in files] ]
@@ -296,41 +195,44 @@ output_names    = [f.split(".")[0].split(",")[0] for f in files]
 paths           = [coord_directory + "/" + f for f in files]
 
 
-i = 0 # Only run for the first geometry. Of course, we could put this into
-      # a loop over all geometries as before.
-
-# Open the text file and convert lon/lat string to Earth Engine geometry object
-f = open( paths[i], 'r')
-urban_geometry_raw = f.read()
-urban_geometry     = [ float(n) for n in urban_geometry_raw.split()]
-urban_geometry_ee  = ee.Geometry.Polygon(urban_geometry)
-
-# Sample 10k points from each region
-sample = ee.Image( 'USGS/NLCD/NLCD2011').sample( region=urban_geometry_ee,
-                                                 numPixels=1e5,
-                                                 seed=1234)
-
-# Export to Drive
-export_job = ee.batch.Export.table.toDrive(sample,
-                              folder="sample_export",
-                              description=output_names[i],
-                              fileFormat="CSV"
-                              )
-export_job.start()
-
-# Uncomment if you want to view your previously submitted jobs, and any errors.
-#print( ee.batch.Task.list() )
+# Iterate over all of our geometries
+for i in range(0,len(files)):
+  
+  # Open the text file and convert lon/lat string to Earth Engine geometry object
+  f = open( paths[i], 'r')
+  urban_geometry_raw = f.read()
+  urban_geometry     = [ float(n) for n in urban_geometry_raw.split()]
+  urban_geometry_ee  = ee.Geometry.Polygon(urban_geometry)
+  
+  # Sample 10k points from each region
+  sample = ee.Image( 'USGS/NLCD/NLCD2011').sample( region=urban_geometry_ee,
+                                                   numPixels=1e5,
+                                                   seed=1234)
+  
+  # Export to Drive
+  export_job = ee.batch.Export.table.toDrive(sample,
+                                folder="sample_export",
+                                description=output_names[i],
+                                fileFormat="CSV"
+                                )
+  export_job.start()
+  
+  # Uncomment if you want to view your previously submitted jobs, and any errors.
+  #print( ee.batch.Task.list() )
 ```
 
 
 Using the "googledrive" package, we can list the contents of our "sample_export" directory to make sure that the code above has worked.
 
-```{r}
-library( googledrive)
+```{r googledrive_setup}
 drive_ls( "sample_export")
 ```
 
-```{r}
+
+Looks like the data are in the right place. Using the GoogleDrive package, we'll load in the first result.
+
+
+```{r get_data_from_drive, warning=FALSE, message=FALSE}
 target_drive_file <- drive_ls( "sample_export") %>% slice(1)
 target_local_file <- here( 
   file.path(
@@ -339,7 +241,7 @@ target_local_file <- here(
 
 drive_download( file = target_drive_file, path = target_local_file, overwrite=TRUE )
 
-csa_nlcd_data <- read.csv( target_local_file,
+csa_nlcd_data <- read_csv( target_local_file,
    col_types =  cols(
      `system:index` = col_integer(),
      impervious = col_integer(),
@@ -352,10 +254,9 @@ csa_nlcd_data <- read.csv( target_local_file,
 ```
 
 Voila - we have data from Google Drive. Let's take a look:
-```{r fig.width=6, fig.height=4}
+```{r view_drive_data, fig.width=6, fig.height=4, message=FALSE, warning=FALSE}
 glimpse( csa_nlcd_data)
 
-library( gridExtra)
 
 plots <- csa_nlcd_data %>% 
   select( -c(`system:index`, .geo)) %>% 
@@ -369,7 +270,7 @@ grid.arrange( grobs=plots, nrow=2)
 
 In a few easy steps, we have imported spatial data into R, used it to drive an Earth Engine function via a Python API, and dragged that data back to R for analysis. Of course, this data is now available in the Python interpreter as well:
 
-```{python}
+```{python view_drive_data_python}
 print( r.csa_nlcd_data.head())
 ```
 
