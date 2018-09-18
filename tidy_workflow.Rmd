@@ -1,0 +1,115 @@
+---
+title: "Tidy R workflows"
+output: html_document
+---
+
+
+## The basics
+
+Tidy workflow is designed to ensure that code is readable, reproducible, and in its most simple workable state. This is important for your sanity, for the quality of the analysis that you're performing, and for ensuring that whoever follows you on the project can clearly understand what you've done and how.
+
+Start by using *projects* in RStudio (File -> New Project). This ensures that every time you load the project, you will be given an instance of R which is set to the project working directory. Everything you do should be contained within this directory. This ensures that a) if you zip the project up and send it to someone, it will work and b) if you use version control, the whole project will be monitored.
+
+Any script should start with importing the various libraries that you're likely to need:
+
+```{r load_libraries, message=FALSE}
+library(tidyverse)
+library(here)
+```
+
+For typical analysis of tabular data (i.e. CSV files, spreadsheets etc), the "tidyverse" package includes pretty much every function that you are likely to need for importing, manipulating, analysing and exporting your data.
+
+```here( "path_in_project/subfolder")``` will give a file path relative to your current project directory.
+
+So if we want to read a csv file, we can use ```here()``` to point to the file we need. Let's use this to read "populous_urban_areas_neat.csv" from within the "data_in" directoryL
+
+```{r read_data}
+pop_data <- here("data_in", "populous_urban_areas_neat.csv") %>% 
+  read_csv()
+```
+
+Notice the use of the ``` %>% ``` (the dplyr "pipe" operator). This takes an object, and passes it to the next function as the first argument. This is a great way to make code readable, if you are doing multiple operations on a single object. Otherwise we may end up with ``` function4( function3( function2( function1( source_data)))) ```, which is pretty nasty.
+
+Notice also that read_csv() prints a message detailing what type of data is in each column. It usually can guess very well, but to make it fully reproducible, we should declare these explicitly:
+
+
+```{r read_data_better}
+pop_data_cols <- cols(
+  Rank                = col_integer(),
+  `2017_pop_estimate` = col_number(),
+  `2010_pop_census`   = col_number(),
+  CSA                 = col_character()
+)
+
+pop_data <- here("data_in", "populous_urban_areas_neat.csv") %>% 
+  read_csv( col_types = pop_data_cols)
+```
+
+Now we know that even if we change the data in the csv file, as long as the data is of the same format it will still be read correctly. Note that the message now doesn't appear. Note also that the column names which start with a number need to be enclosed in back ticks to be read correctly by R.
+
+We can take a look at the data in this file:
+
+```{r view_data}
+glimpse( pop_data)
+```
+
+This gives us a good view of the data. Let's manipulate it. We could use the mutate command to add another column to the data, giving the change between 2010 and 2017. Note the use of the backticks where column names start with a number:
+
+
+```{r add_pop_change}
+pop_data <- pop_data %>% 
+  mutate( pop_change = `2017_pop_estimate` / `2010_pop_census`)
+
+glimpse( pop_data)
+```
+
+Maybe we want to summarise the dataframe down to an average population:
+
+```{r summary_stats}
+avg_pop <- pop_data %>% 
+  summarise( mean_pop = mean( `2017_pop_estimate`))
+
+avg_pop %>% glimpse()
+```
+
+
+Perhaps we want to summarise the data, but we need to group the dataframe first. We could get the mean population change for those areas that have increased, and that for those that have decreased:
+
+```{r grouped_stats}
+pos_neg_change <- pop_data %>% 
+  mutate(    pop_change_direction = if_else( pop_change > 1, "pos", "neg")) %>% 
+  group_by(  pop_change_direction) %>% 
+  summarise( mean_population_change = mean( pop_change))
+
+glimpse( pos_neg_change)
+```
+
+Exporting data is very much like importing it:
+
+```{r export_data}
+pos_neg_change %>% 
+  write_csv( here( "data_out", "pop_change.csv"))
+```
+
+
+## More good practice
+
+This section could be huge, but the following are the absolute basics for making your projects neat and reproducible.
+
+* White space is your friend. Notice how the lines of code above are neatly indented and aligned
+* If possible, stick to the "tidyverse" way of doing things (see https://tidyverse.org for more). This will make everything much neater and you will thank yourself!
+* Think carefully about your file names and variable names. It's better to type a few more characters and be descriptive
+* See https://speakerdeck.com/jennybc/how-to-name-files for tips on how to organise your files nicely - use it and stick to it!
+* Once you're happy with the day-to-day workflow and you're moving into bigger projects, it's a good idea to use version control. That's a whole other kettle of fish, but take a look into GIT.
+
+
+
+
+
+
+
+
+
+
+
+
